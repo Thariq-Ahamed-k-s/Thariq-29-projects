@@ -29,32 +29,26 @@ GET /transcribe → Record and transcribe user’s spoken answer.
 POST /evaluate_answer → Evaluate transcribed answer for correctness.
 
 2. tools.py - 🛠️ Tool Shop Product Management (GUI)
-Description:
-A Tkinter-based GUI tool for managing a tool shop’s products using SQLite.
+# Product Manager App
 
-Add, view, search, update, and delete products.
+A simple desktop application built with Python, SQLite, and TTKBootstrap that allows users to manage inventory in a tool shop. It supports product addition, viewing, billing, stock adjustment, and deletion.
 
-Calculates GST automatically.
+## Features
+- Add new products with name, category, price, and quantity
+- View all products in a tabular view
+- Generate bills by adding products to a cart and calculating total
+- Adjust existing product stock
+- Delete products by name
 
-Scrollable UI for large product lists.
+## Technologies Used
+- Python 3.x
+- Tkinter (GUI)
+- ttkbootstrap (UI styling)
+- SQLite (Database)
 
-How to Run:
-
-bash
-Copy
-Edit
-python tools.py
-Features:
-
-Add new products with category and price.
-
-View all products with GST calculation.
-
-Search products by name.
-
-Update product details.
-
-Delete products from inventory.
+## Customization
+- Change themes by replacing the theme in `ttk.Style("superhero")`
+- Update background color from `self.configure(bg="#726f6f")`
 
 3. traintest.py - 🤖 Scikit-Learn Practice
 Description:
