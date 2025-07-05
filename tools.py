@@ -13,54 +13,16 @@ cursor.execute('''
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         category TEXT NOT NULL,
-        price REAL NOT NULL
+        price REAL NOT NULL,
+        quantity INTEGER DEFAULT 0
     )
 ''')
 conn.commit()
 
-try:
-    cursor.execute('ALTER TABLE products ADD COLUMN quantity INTEGER DEFAULT 0')
-    conn.commit()
-except sqlite3.OperationalError:
-    pass
-
-# App structure
-class ProductManagerApp(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Product Manager")
-        self.geometry("900x700")
-
-        self.frames = {}
-
-        container = ttk.Frame(self)
-        container.pack(expand=True, fill='both')
-
-        for F in (HomePage, AddProductPage, ViewProductPage, BillingPage, AdjustStockPage, DeleteProductPage):
-            frame = F(parent=container, controller=self)
-            self.frames[F] = frame
-            frame.grid(row=0, column=0, sticky='nsew')
-
-        self.show_frame(HomePage)
-
-    def show_frame(self, page_class):
-        frame = self.frames[page_class]
-        frame.tkraise()
-
-class HomePage(ttk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent)
-        ttk.Label(self, text="Product Manager", font=("Arial", 18, "bold")).pack(pady=20)
-        ttk.Button(self, text="Add Product", width=30, command=lambda: controller.show_frame(AddProductPage)).pack(pady=10)
-        ttk.Button(self, text="View Products", width=30, command=lambda: controller.show_frame(ViewProductPage)).pack(pady=10)
-        ttk.Button(self, text="Billing", width=30, command=lambda: controller.show_frame(BillingPage)).pack(pady=10)
-        ttk.Button(self, text="Adjust Stock", width=30, command=lambda: controller.show_frame(AdjustStockPage)).pack(pady=10)
-        ttk.Button(self, text="Delete Product", width=30, command=lambda: controller.show_frame(DeleteProductPage)).pack(pady=10)
-
 class AddProductPage(ttk.Frame):
     def __init__(self, parent, controller):
-        super().__init__(parent)
-        ttk.Label(self, text="Add Product", font=("Arial", 18, "bold")).pack(pady=20)
+        super().__init__(parent, padding=20)
+        ttk.Label(self, text="Add Product", font=("Segoe UI", 18, "bold")).pack(pady=20)
 
         self.name_entry = self.create_entry("Product Name:")
         self.category_entry = self.create_entry("Category:")
@@ -71,11 +33,10 @@ class AddProductPage(ttk.Frame):
         ttk.Button(self, text="Back", bootstyle=SECONDARY, command=lambda: controller.show_frame(HomePage)).pack(pady=10)
 
     def create_entry(self, label_text):
-        frame = ttk.Frame(self)
-        frame.pack(pady=5)
-        ttk.Label(frame, text=label_text).pack(side='left', padx=5)
-        entry = ttk.Entry(frame, width=30)
-        entry.pack(side='left', padx=5)
+        frame = ttk.LabelFrame(self, text=label_text, padding=10)
+        frame.pack(pady=5, fill='x')
+        entry = ttk.Entry(frame, width=40)
+        entry.pack(padx=5, pady=5)
         return entry
 
     def add_product(self):
@@ -99,31 +60,10 @@ class AddProductPage(ttk.Frame):
         conn.commit()
         messagebox.showinfo("Success", "Product added successfully!")
 
-class ViewProductPage(ttk.Frame):
-    def __init__(self, parent, controller):
-        super().__init__(parent)
-        ttk.Label(self, text="View Products", font=("Arial", 18, "bold")).pack(pady=20)
-
-        self.tree = ttk.Treeview(self, columns=("ID", "Name", "Category", "Price", "Quantity"), show='headings', bootstyle=INFO)
-        for col in ["ID", "Name", "Category", "Price", "Quantity"]:
-            self.tree.heading(col, text=col)
-        self.tree.pack(expand=True, fill='both', padx=10, pady=10)
-
-        ttk.Button(self, text="Load Products", bootstyle=PRIMARY, command=self.load_products).pack(pady=10)
-        ttk.Button(self, text="Back", bootstyle=SECONDARY, command=lambda: controller.show_frame(HomePage)).pack(pady=10)
-
-    def load_products(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        cursor.execute('SELECT * FROM products')
-        for row in cursor.fetchall():
-            self.tree.insert("", "end", values=row)
-
 class BillingPage(ttk.Frame):
     def __init__(self, parent, controller):
-        super().__init__(parent)
-        ttk.Label(self, text="Billing", font=("Arial", 18, "bold")).pack(pady=20)
+        super().__init__(parent, padding=20)
+        ttk.Label(self, text="Billing", font=("Segoe UI", 18, "bold")).pack(pady=20)
 
         self.cart = []
         self.total_amount = 0
@@ -138,17 +78,16 @@ class BillingPage(ttk.Frame):
             self.cart_display.heading(col, text=col)
         self.cart_display.pack(expand=True, fill='both', padx=10, pady=10)
 
-        self.total_label = ttk.Label(self, text="Total: 0", font=("Arial", 12, "bold"))
+        self.total_label = ttk.Label(self, text="Total: 0", font=("Segoe UI", 12, "bold"))
         self.total_label.pack(pady=10)
 
         ttk.Button(self, text="Back", bootstyle=SECONDARY, command=lambda: controller.show_frame(HomePage)).pack(pady=10)
 
     def create_entry(self, label_text):
-        frame = ttk.Frame(self)
-        frame.pack(pady=5)
-        ttk.Label(frame, text=label_text).pack(side='left', padx=5)
-        entry = ttk.Entry(frame, width=30)
-        entry.pack(side='left', padx=5)
+        frame = ttk.LabelFrame(self, text=label_text, padding=10)
+        frame.pack(pady=5, fill='x')
+        entry = ttk.Entry(frame, width=40)
+        entry.pack(padx=5, pady=5)
         return entry
 
     def add_to_cart(self):
@@ -171,8 +110,7 @@ class BillingPage(ttk.Frame):
         if result:
             prod_id, current_stock, price = result
             if quantity_sold <= current_stock:
-                new_stock = current_stock - quantity_sold
-                cursor.execute('UPDATE products SET quantity=? WHERE id=?', (new_stock, prod_id))
+                cursor.execute('UPDATE products SET quantity=? WHERE id=?', (current_stock - quantity_sold, prod_id))
                 conn.commit()
                 total = price * quantity_sold
                 self.cart.append((product_name, quantity_sold, total))
@@ -186,8 +124,8 @@ class BillingPage(ttk.Frame):
 
 class AdjustStockPage(ttk.Frame):
     def __init__(self, parent, controller):
-        super().__init__(parent)
-        ttk.Label(self, text="Adjust Stock", font=("Arial", 18, "bold")).pack(pady=20)
+        super().__init__(parent, padding=20)
+        ttk.Label(self, text="Adjust Stock", font=("Segoe UI", 18, "bold")).pack(pady=20)
 
         self.name_entry = self.create_entry("Product Name:")
         self.quantity_entry = self.create_entry("New Quantity:")
@@ -196,11 +134,10 @@ class AdjustStockPage(ttk.Frame):
         ttk.Button(self, text="Back", bootstyle=SECONDARY, command=lambda: controller.show_frame(HomePage)).pack(pady=10)
 
     def create_entry(self, label_text):
-        frame = ttk.Frame(self)
-        frame.pack(pady=5)
-        ttk.Label(frame, text=label_text).pack(side='left', padx=5)
-        entry = ttk.Entry(frame, width=30)
-        entry.pack(side='left', padx=5)
+        frame = ttk.LabelFrame(self, text=label_text, padding=10)
+        frame.pack(pady=5, fill='x')
+        entry = ttk.Entry(frame, width=40)
+        entry.pack(padx=5, pady=5)
         return entry
 
     def update_stock(self):
@@ -221,8 +158,7 @@ class AdjustStockPage(ttk.Frame):
         result = cursor.fetchone()
 
         if result:
-            prod_id = result[0]
-            cursor.execute('UPDATE products SET quantity=? WHERE id=?', (new_quantity, prod_id))
+            cursor.execute('UPDATE products SET quantity=? WHERE id=?', (new_quantity, result[0]))
             conn.commit()
             messagebox.showinfo("Success", "Stock updated successfully!")
         else:
@@ -230,8 +166,8 @@ class AdjustStockPage(ttk.Frame):
 
 class DeleteProductPage(ttk.Frame):
     def __init__(self, parent, controller):
-        super().__init__(parent)
-        ttk.Label(self, text="Delete Product", font=("Arial", 18, "bold")).pack(pady=20)
+        super().__init__(parent, padding=20)
+        ttk.Label(self, text="Delete Product", font=("Segoe UI", 18, "bold")).pack(pady=20)
 
         self.name_entry = self.create_entry("Product Name:")
 
@@ -239,25 +175,75 @@ class DeleteProductPage(ttk.Frame):
         ttk.Button(self, text="Back", bootstyle=SECONDARY, command=lambda: controller.show_frame(HomePage)).pack(pady=10)
 
     def create_entry(self, label_text):
-        frame = ttk.Frame(self)
-        frame.pack(pady=5)
-        ttk.Label(frame, text=label_text).pack(side='left', padx=5)
-        entry = ttk.Entry(frame, width=30)
-        entry.pack(side='left', padx=5)
+        frame = ttk.LabelFrame(self, text=label_text, padding=10)
+        frame.pack(pady=5, fill='x')
+        entry = ttk.Entry(frame, width=40)
+        entry.pack(padx=5, pady=5)
         return entry
 
     def delete_product(self):
         product_name = self.name_entry.get()
-
         cursor.execute('SELECT id FROM products WHERE name=?', (product_name,))
-        result = cursor.fetchone()
-
-        if result:
+        if cursor.fetchone():
             cursor.execute('DELETE FROM products WHERE name=?', (product_name,))
             conn.commit()
             messagebox.showinfo("Success", f"Product '{product_name}' deleted successfully!")
         else:
             messagebox.showwarning("Not Found", "Product not found!")
+
+class HomePage(ttk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, padding=20)
+        ttk.Label(self, text="View Products", font=("Segoe UI", 18, "bold")).pack(pady=20)
+
+        self.tree = ttk.Treeview(self, columns=("ID", "Name", "Category", "Price", "Quantity"), show='headings', bootstyle=INFO, height=12)
+        for col in ["ID", "Name", "Category", "Price", "Quantity"]:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=150)
+        self.tree.pack(padx=10, pady=10)
+
+        ttk.Button(self, text="Load Products", bootstyle=PRIMARY, command=self.load_products).pack(pady=10)
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(anchor='se', pady=10)
+        buttons = [
+            ("Add Product", AddProductPage),
+            ("Billing", BillingPage),
+            ("Adjust Stock", AdjustStockPage),
+            ("Delete Product", DeleteProductPage),
+        ]
+        for i, (text, page) in enumerate(buttons):
+            ttk.Button(btn_frame, text=text, bootstyle=SECONDARY, width=18, command=lambda p=page: controller.show_frame(p)).grid(row=0, column=i, padx=5)
+
+    def load_products(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        cursor.execute('SELECT * FROM products')
+        for row in cursor.fetchall():
+            self.tree.insert("", "end", values=row)
+
+class ProductManagerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        style = ttk.Style("superhero")
+        self.title("Product Manager")
+        self.geometry("900x700")
+        self.configure(bg="#726f6f")
+
+        self.frames = {}
+        container = ttk.Frame(self, padding=20, borderwidth=3, relief="ridge")
+        container.pack(expand=True, fill='both')
+
+        for F in (HomePage, AddProductPage, BillingPage, AdjustStockPage, DeleteProductPage):
+            frame = F(parent=container, controller=self)
+            self.frames[F] = frame
+            frame.grid(row=0, column=0, sticky='nsew')
+
+        self.show_frame(HomePage)
+
+    def show_frame(self, page_class):
+        frame = self.frames[page_class]
+        frame.tkraise()
 
 if __name__ == "__main__":
     app = ProductManagerApp()
