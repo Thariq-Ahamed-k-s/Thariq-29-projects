@@ -1,0 +1,259 @@
+from flask import Flask, request, jsonify
+import os
+import json
+import re
+import requests
+from PyPDF2 import PdfReader
+from dotenv import load_dotenv
+import mysql.connector
+from docx import Document
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# ===============================
+# Flask Setup
+# ===============================
+app = Flask(__name__)
+load_dotenv()
+
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+MODEL = "pixtral-12b-2409"
+MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
+
+HEADERS = {
+    "Authorization": f"Bearer {MISTRAL_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+DB_CONFIG = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': '',
+    'database': 'aijobhunter_dev'
+}
+
+# ===============================
+# PDF/Docx Reader
+# ===============================
+def extract_text_from_file(file_path):
+    if file_path.endswith('.pdf'):
+        reader = PdfReader(file_path)
+        return " ".join(page.extract_text() or "" for page in reader.pages)
+    elif file_path.endswith('.docx'):
+        doc = Document(file_path)
+        return " ".join(para.text for para in doc.paragraphs)
+    else:
+        return ""
+
+# ===============================
+# Mistral Scoring Function with Text Input
+# ===============================
+def get_mistral_score(resume_text, parameter, weightages):
+    scoring_levels = "\n".join([f"{i} -> {weightages.get(i, '')}" for i in range(10, -1, -1)])
+    prompt = f"""
+You are an expert resume evaluator.
+Given the following resume and scoring levels for the parameter \"{parameter}\", select the best matching weightage.
+Return ONLY the numeric score (0-10). No explanation.
+
+Resume Text:
+{resume_text}
+
+Scoring Levels:
+{scoring_levels}
+"""
+
+    data = {
+        "model": MODEL,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt}
+            ]}
+        ],
+        "temperature": 0.0
+    }
+
+    try:
+        response = requests.post(MISTRAL_URL, headers=HEADERS, json=data, timeout=60)
+        response.raise_for_status()
+        content = response.json()['choices'][0]['message']['content'].strip()
+        return int(content)
+    except Exception as e:
+        print("❌ Mistral API Error:", e)
+        return 0
+
+# ===============================
+# Process Seeker Resume
+# ===============================
+def process_seeker(cursor, job_id, user_id, resume_text, weightage_rows):
+    detailed_scores = {}
+    raw_score_total = 0
+
+    for row in weightage_rows:
+        parameter = row['parameter']
+        weightages = {i: row.get(f'weightage_{i}') for i in range(11)}
+        score = get_mistral_score(resume_text, parameter, weightages)
+        detailed_scores[parameter] = score * 10
+        raw_score_total += score
+    print(detailed_scores)
+
+    overall_score = sum(detailed_scores.values()) / len(detailed_scores) if detailed_scores else 0
+    
+    cursor.execute("""
+        INSERT INTO tbl_job_application (job_id, user_id, overall_score, overall_percent, created_by, created_at, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        job_id, user_id, int(overall_score), raw_score_total, 1, 1719830400, 1, 1719830400
+    ))
+    application_id = cursor.lastrowid
+
+    for parameter, score_percent in detailed_scores.items():
+        cursor.execute("SELECT id FROM tbl_job_weightage WHERE job_id = %s AND parameter = %s", (job_id, parameter))
+        weightage_row = cursor.fetchone()
+        job_weightage_id = weightage_row['id'] if weightage_row else None
+
+        cursor.execute("""
+            INSERT INTO tbl_job_application_weightage (
+                job_application_id, job_weightage_id, parameter, weightage, weightage_percent,
+                created_by, created_at, updated_by, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            application_id, job_weightage_id, parameter, score_percent / 10, score_percent,
+            1, 1719830400, 1, 1719830400
+        ))
+
+    return {"user_id": user_id, "overall_score": overall_score}
+
+# ===============================
+# Process Job Endpoint
+# ===============================
+@app.route('/process_job', methods=['POST'])
+def process_job():
+    job_id = request.json.get('job_id')
+    if not job_id:
+        return jsonify({"error": "Missing job_id"}), 400
+
+    conn = mysql.connector.connect(**DB_CONFIG)
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("UPDATE tbl_job SET ai_status = 1 WHERE id = %s", (job_id,))
+    conn.commit()
+
+    cursor.execute("SELECT role_id, description, minimum_resume_qualifying_score FROM tbl_job WHERE id = %s", (job_id,))
+    job = cursor.fetchone()
+    if not job:
+        cursor.execute("UPDATE tbl_job SET ai_status = 3 WHERE id = %s", (job_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"error": "Job not found."}), 404
+
+    role_id = job['role_id']
+    minimum_score = job['minimum_resume_qualifying_score'] or 0
+
+    cursor.execute("SELECT * FROM tbl_job_seeker WHERE designation_id = %s", (role_id,))
+    seekers = cursor.fetchall()
+    if not seekers:
+        cursor.execute("UPDATE tbl_job SET ai_status = 3 WHERE id = %s", (job_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"error": "No job seekers found."}), 404
+
+    cursor.execute("SELECT * FROM tbl_job_weightage WHERE job_id = %s", (job_id,))
+    weightage_rows = cursor.fetchall()
+
+    results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = []
+        for seeker in seekers:
+            resume_path = os.path.join('resumes', seeker['curriculum_vitae'])
+            if not os.path.exists(resume_path):
+                continue
+            resume_text = extract_text_from_file(resume_path)
+            futures.append(executor.submit(process_seeker, cursor, job_id, seeker['user_id'], resume_text, weightage_rows))
+
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                results.append(result)
+
+    total_applications = len(results)
+    qualified_applications = sum(1 for r in results if r['overall_score'] >= minimum_score)
+
+    cursor.execute("""
+        UPDATE tbl_job
+        SET total_applications = %s,
+            qualified_applications = %s,
+            ai_status = 2
+        WHERE id = %s
+    """, (total_applications, qualified_applications, job_id))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Job resumes processed.", "results": results}), 200
+
+# ===============================
+# Init from Job Seeker Endpoint
+# ===============================
+@app.route('/init', methods=['POST'])
+def init_from_seeker():
+    seeker_id = request.json.get('seeker_id')
+    if not seeker_id:
+        return jsonify({"error": "Missing seeker_id"}), 400
+
+    conn = mysql.connector.connect(**DB_CONFIG)
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT designation_id, curriculum_vitae, user_id FROM tbl_job_seeker WHERE id = %s", (seeker_id,))
+    seeker = cursor.fetchone()
+    if not seeker:
+        conn.close()
+        return jsonify({"error": "Job seeker not found"}), 404
+
+    designation_id = seeker['designation_id']
+    resume_filename = seeker['curriculum_vitae']
+    user_id = seeker['user_id']
+    resume_path = os.path.join('resumes', resume_filename)
+    if not os.path.exists(resume_path):
+        conn.close()
+        return jsonify({"error": "Resume file not found"}), 404
+
+    resume_text = extract_text_from_file(resume_path)
+
+    cursor.execute("SELECT id, description, minimum_resume_qualifying_score FROM tbl_job WHERE role_id = %s", (designation_id,))
+    jobs = cursor.fetchall()
+    if not jobs:
+        conn.close()
+        return jsonify({"error": "No matching jobs found for designation"}), 404
+
+    results = []
+    for job in jobs:
+        job_id = job['id']
+        minimum_score = job['minimum_resume_qualifying_score'] or 0
+
+        cursor.execute("SELECT * FROM tbl_job_weightage WHERE job_id = %s", (job_id,))
+        weightage_rows = cursor.fetchall()
+
+        result = process_seeker(cursor, job_id, user_id, resume_text, weightage_rows)
+        if result:
+            results.append(result)
+
+        if result['overall_score'] >= minimum_score:
+            cursor.execute("""
+                UPDATE tbl_job SET
+                    total_applications = total_applications + 1,
+                    qualified_applications = qualified_applications + 1
+                WHERE id = %s
+            """, (job_id,))
+        else:
+            cursor.execute("""
+                UPDATE tbl_job SET total_applications = total_applications + 1
+                WHERE id = %s
+            """, (job_id,))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Seeker resume processed for matching jobs", "results": results}), 200
+
+# ===============================
+# Run Flask App
+# ===============================
+if __name__ == '__main__':
+    app.run(debug=True)
